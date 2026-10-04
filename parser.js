@@ -1,0 +1,26 @@
+(function(global){
+'use strict';
+const FORM='https://docs.google.com/forms/d/e/1FAIpQLSdgWlFhZCX03lXovKt7hJ2ovbx_bWE7jGqJ4dfguXR_L4AgqA/';
+const ENTRY={person:'85528461',date:'110279927',expense:'1535940707',tax:'2094955144',income:'1138614808',payment:'1793926944',currency:'1491572199',item:'917832128',invoice:'1460254888',note:'936516620',advance:'592906968'};
+function validDate(y,m,d){y=Number(y);m=Number(m);d=Number(d);if(y<1912)y+=1911;const date=new Date(Date.UTC(y,m-1,d));return date.getUTCFullYear()===y&&date.getUTCMonth()===m-1&&date.getUTCDate()===d?`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`:'';}
+function money(x){const s=String(x??'').replace(/[,，\s$＄元NTD]/g,'');return /^\d+(?:\.\d{1,2})?$/.test(s)?Number(s):null;}
+function parse(raw){
+ const t=String(raw||'').normalize('NFKC'),lines=t.split(/[\r\n]+/),out={warnings:[]};
+ const invoices=[...new Set([...t.toUpperCase().matchAll(/\b([A-Z]{2})[\s-]*(\d(?:[\s-]*\d){7})\b/g)].map(m=>m[1]+m[2].replace(/[\s-]/g,'')))];
+ if(invoices.length===1)out.invoice=invoices[0];else out.warnings.push(invoices.length?'找到多個發票號碼，請選正確號碼。':'未辨識到發票號碼；不要因此直接認定為收據。');
+ const dates=[...new Set([...t.matchAll(/(?:民國\s*)?(\d{3,4})\s*[年./-]\s*(\d{1,2})\s*[月./-]\s*(\d{1,2})\s*日?/g)].map(m=>validDate(m[1],m[2],m[3])).filter(Boolean))];
+ if(dates.length===1)out.date=dates[0];else out.warnings.push(dates.length?'找到多個日期，請確認發票／收據日期。':'未辨識到有效日期，請手填。');
+ function find(labels){const found=[];for(const line of lines){const compact=line.replace(/\s/g,'');if(labels.includes('營業稅')&&/未稅/.test(compact))continue;const m=compact.match(new RegExp(labels+'[:：]?\\s*(?:NT\\$|NTD|[$＄])?(\\d[\\d,，]*(?:\\.\\d{1,2})?)','i'));if(m){const v=money(m[1]);if(v!==null)found.push(v);}}const unique=[...new Set(found)];return unique.length===1?unique[0]:null;}
+ out.expense=find('(?:未稅(?:金額|總額)?|銷售額(?:合計)?|^SUBTOTAL)');out.tax=find('(?:營業稅(?:額)?|稅額|稅金|^稅|^TAX(?:AMOUNT)?)');out.total=find('(?:含稅(?:總額|金額)?|總計|總金額|總額|合計金額|應付金額|^TOTAL(?:AMOUNT)?|GRANDTOTAL)');
+ if(out.expense===null&&out.total!==null&&out.tax!==null&&out.total>=out.tax){out.expense=Math.round((out.total-out.tax)*100)/100;out.warnings.push('未稅金額由已辨識的總額減稅額帶入，請核對。');}
+ if(out.total===null&&out.expense!==null&&out.tax!==null)out.total=Math.round((out.expense+out.tax)*100)/100;
+ if(out.expense===null||out.tax===null)out.warnings.push('金額尚未完整；沒有稅額時不自動用 5% 推算。');
+ if(!out.invoice&&/收據/.test(t)&&!/發票/.test(t))out.document='receipt';
+ return out;
+}
+function metadata(v,id){const fields=[`【收支類型:${v.direction==='income'?'收入':'支出'}】`,`【憑證ID:${id}】`,`【憑證種類:${v.document==='receipt'?'收據':v.document==='pending'?'未開發票':'發票'}】`,`【總額:${v.total}】`];if(v.paymentDate)fields.push(`【收付日:${v.paymentDate}】`);return [String(v.note||'').replace(/【(?:憑證ID|憑證種類|總額|付款日|收付日|收支類型):[^】]*】/g,'').trim(),fields.join('')].filter(Boolean).join('\n');}
+function payload(v,id){const data={...v,expense:v.direction==='income'?'':v.expense,income:v.direction==='income'?v.total:'',invoice:v.document==='receipt'?'收據':v.document==='pending'?'未開發票':String(v.invoice||'').toUpperCase().replace(/\s|-/g,''),note:metadata(v,id)};const p=new URLSearchParams();for(const k of Object.keys(ENTRY))p.append('entry.'+ENTRY[k],data[k]||data[k]===0?String(data[k]):'');return p;}
+function validate(v){const e=[],income=v.direction==='income',paid=income?'V':'C';if(!/^\d{4}-\d{2}-\d{2}$/.test(v.date)||validDate(...v.date.split('-'))!==v.date)e.push('請填有效日期');if(!['invoice','receipt','pending'].includes(v.document))e.push('請選憑證種類');if(v.document==='invoice'&&!/^[A-Z]{2}\d{8}$/.test(String(v.invoice).toUpperCase().replace(/[\s-]/g,'')))e.push('發票號碼需為 2 個英文字母＋8 位數字');const a=money(v.expense),b=money(v.tax),c=money(v.total);if(b===null||c===null||c<=0||(!income&&a===null))e.push('請填金額、稅額與總額');else if(income?b>c:Math.abs(a+b-c)>0.005)e.push(income?'稅額不可大於含稅收入':'支出＋稅額與總額不符');if(!['',paid].includes(v.payment))e.push(income?'收入只能選 V 收訖或空白':'支出只能選 C 付訖或空白');if(v.payment===paid&&!v.paymentDate)e.push('收付訖請填實際收付日');if(v.paymentDate&&validDate(...v.paymentDate.split('-'))!==v.paymentDate)e.push('收付日格式不正確');if(v.payment===''&&v.paymentDate)e.push('未收付請清空實際收付日');if(!['','潘','黃','張','吳','lab'].includes(v.advance))e.push('請選單一代收墊');if(!String(v.item||'').trim())e.push('請填項目');if(!String(v.currency||'').trim())e.push('請填幣別');return e;}
+function applyRules(raw,rules,current={}){const candidates={},warnings=[],text=String(raw).normalize('NFKC').toLowerCase();for(const r of rules){if(!r.keyword||!r.value||!['item','person','currency','note'].includes(r.field))continue;if(text.includes(String(r.keyword).normalize('NFKC').toLowerCase()))(candidates[r.field]??=[]).push(String(r.value));}const values={};for(const [field,list] of Object.entries(candidates)){if(String(current[field]||'').trim())continue;const unique=[...new Set(list)];if(unique.length===1)values[field]=unique[0];else warnings.push('多條規則對「'+field+'」給出不同內容，請手動確認。');}return {values,warnings};}
+const api={FORM,ENTRY,parse,payload,validate,applyRules,validDate,money};global.ReceiptParser=api;if(typeof module!=='undefined')module.exports=api;
+})(typeof window!=='undefined'?window:globalThis);
