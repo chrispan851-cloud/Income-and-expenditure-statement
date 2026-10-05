@@ -7,7 +7,7 @@ function docxPages(xml){
  for(const el of body.children){if(el.localName==='sectPr')continue;
   const before=el.getElementsByTagNameNS(W,'pageBreakBefore').length;if(before)flush();
   const ps=el.localName==='p'?[el]:[...el.getElementsByTagNameNS(W,'p')];
-  for(const p of ps){let line='';const walk=node=>{for(const child of node.childNodes){if(child.nodeType!==1)continue;if(child.namespaceURI===W&&child.localName==='t')line+=child.textContent;else if(child.namespaceURI===W&&child.localName==='br'){if(child.getAttributeNS(W,'type')==='page'){if(line.trim())parts.push(line);line='';flush();}else line+='\n';}else if(child.namespaceURI===W&&child.localName==='tab')line+=' ';else walk(child);}};walk(p);if(line.trim())parts.push(line);}
+  for(const p of ps){let line='';const walk=node=>{for(const child of node.childNodes){if(child.nodeType!==1)continue;if(child.namespaceURI===W&&child.localName==='t')line+=child.textContent;else if(child.namespaceURI===W&&child.localName==='br'){if(child.getAttributeNS(W,'type')==='page'){if(line.trim())parts.push(line);line='';flush();}else line+='\n';}else if(child.namespaceURI===W&&child.localName==='tab')line+=' ';else if(child.namespaceURI===W&&child.localName==='p'){line+='\n';walk(child);line+='\n';}else walk(child);}};walk(p);if(line.trim())parts.push(line);}
   const section=el.getElementsByTagNameNS(W,'sectPr')[0];if(section){const type=section.getElementsByTagNameNS(W,'type')[0]?.getAttributeNS(W,'val');flush();}
  }
  flush();return pages;
